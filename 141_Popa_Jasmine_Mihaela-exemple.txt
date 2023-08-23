@@ -1,0 +1,183 @@
+
+--1 Să se afișeze numele angajaților și numărul de obiecte de artă 
+-- din secțiunile pe care le supervizează, dar numai dacă
+-- numărul de obiecte de artă este mai mare decât 
+-- media numărului de obiecte de artă per secțiune.
+
+SELECT A.Nume_angajat, COUNT(O.ID_Obiect) AS Nr_Obiecte
+FROM angajati A, "OBIECTE_DE_ARTĂ" O, Secțiuni S
+WHERE A.ID_Angajat = S.ID_angajat_responsabil AND S.ID_Secțiune = O.ID_Secțiune
+GROUP BY A.Nume_angajat
+HAVING COUNT(O.ID_Obiect) > (SELECT AVG(Nr_Obiecte) FROM (SELECT COUNT(*) AS Nr_Obiecte FROM "OBIECTE_DE_ARTĂ" GROUP BY ID_Secțiune));
+
+                            
+--2 Să se afișeze ID-urile și prețurile biletelor care au un preț mai mare de 25.
+SELECT B.ID_Bilet, B.Preț
+FROM (SELECT * FROM Bilete WHERE Preț > 25) B;
+
+--3 Să se afișeze numele  secțiunilor și media ID-urilor obiectelor 
+-- de artă pentru aceste secțiuni, dar numai pentru secțiunile care
+-- au mai multe obiecte de artă decât media generală.
+
+SELECT S.Nume_Secțiune, AVG(O.ID_Obiect) AS Medie_Obiecte
+FROM "SECȚIUNI" S, "OBIECTE_DE_ARTĂ" O
+WHERE S.ID_Secțiune = O.ID_Secțiune
+GROUP BY S.Nume_Secțiune
+HAVING COUNT(O.ID_Obiect) > (SELECT AVG(Obs) FROM (SELECT COUNT(*) as Obs FROM "OBIECTE_DE_ARTĂ" O GROUP BY O.ID_Secțiune));
+
+--4 Să se afișeze numele angajaților (sau 'N/A' dacă numele este nul) și poziția lor. Dacă un angajat are rolul de Director, acesta poate
+-- fi considerat ca fiind un angajat cu o poziție superioară, altfel doar un angajat.
+-- Rezultatele sunt ordonate în funcție de salariul descrescător.
+
+SELECT NVL(A.Nume_angajat, 'N/A') AS Nume_Angajat, DECODE(A.Poziție, 'Director', 'Angajat cu poziție superioară', 'Angajat') AS Poziție
+FROM angajati A
+ORDER BY A.Salariu DESC;
+
+--5 Scriind doar cu majuscule, afișați ID-ul și numele angajaților, primele 3 lietere din poziție și 
+-- numărul de luni de la angajare până în prezent. Dacă un angajat lucrează de mai mult de un an, 
+-- atunci starea sa de angajare poate fi numită "Veche", altfel "Nouă".
+
+WITH Tabel_Temporal AS (SELECT ID_Angajat, UPPER(Nume_Angajat) AS Nume, SUBSTR(Poziție, 1, 3) AS Poz, MONTHS_BETWEEN(SYSDATE, Data_angajare) AS Luni_Angajare
+                        FROM Angajati)
+SELECT ID_Angajat, Nume, Poz,
+       CASE
+           WHEN Luni_Angajare > 12 THEN 'Veche'
+           ELSE 'Noua'
+       END AS Stare_Angajare
+FROM Tabel_Temporal;
+
+
+
+--1 Actualizarea salariilor angajaților
+-- care supervizează mai multe secțiuni decât media tuturor angajaților:
+
+UPDATE angajati
+SET Salariu = Salariu * 1.1
+WHERE ID_Angajat IN (
+    SELECT ID_angajat_responsabil
+    FROM Secțiuni
+    GROUP BY ID_angajat_responsabil
+    HAVING COUNT(ID_Secțiune) > (
+        SELECT AVG(Nr_Secțiuni)
+        FROM (
+            SELECT COUNT(ID_Secțiune) as Nr_Secțiuni
+            FROM Secțiuni
+            GROUP BY ID_angajat_responsabil
+        )
+    )
+);
+
+
+--2 Ștergerea vizitelor la expoziții care s-au terminat
+
+DELETE FROM Vizite
+WHERE ID_bilet IN (
+    SELECT B.ID_Bilet
+    FROM Bilete B, Expoziții E
+    WHERE B.ID_Expoziție = E.ID_Expoziție AND E.Data_sfârșit < SYSDATE
+);
+
+--3 Actualizarea prețurilor biletelor pentru evenimentele viitoare 
+-- (care încă nu s-au întâmplat) ale unei expoziții care s-a terminat
+
+UPDATE Bilete
+SET Preț = Preț * 0.9
+WHERE ID_Eveniment IN (
+    SELECT E.ID_Eveniment
+    FROM Evenimente E
+    WHERE E.Data_ora > SYSDATE AND E.ID_Expoziție IN (
+        SELECT ID_Expoziție
+        FROM Expoziții
+        WHERE Data_sfârșit < SYSDATE
+    )
+);
+
+
+
+-- 14. Crearea unei vizualizari complexe + operatie LMD permisa si nepermisa
+
+create view viz
+as
+select a.nume_angajat, a.salariu,a.poziție,
+      e.nume_expoziție, e.data_început|| '-'||e.data_sfârșit as "Perioada desf"
+from angajati a
+join expoziții e on a.id_angajat=e.id_angajat_responsabil
+where a.salariu>1000;
+
+
+--operație LMD permisă
+select * from viz where Poziție='Expert_artistic';
+
+--operație LMD nepermisă
+update viz
+set [Salariu]=[Salariu]*10, [Nume_expoziție]=concat('Doar o',[Nume_expoziție]);
+
+--rezolvare
+update viz 
+set Salariu=Salariu*10;
+
+update viz
+set Nume_expoziție=concat('Doar o',Nume_expoziție);
+
+
+--15. cerere outer-join pe minimum 4 tabele
+
+SELECT a.id_angajat, a.nume_angajat, a.poziție
+FROM angajati a
+FULL OUTER JOIN expoziții exp on exp.id_angajat_responsabil=a.id_angajat
+FULL OUTER JOIN evenimente ev on ev.id_angajat_responsabil=a.id_angajat
+FULL OUTER JOIN secțiuni s on s.id_angajat_responsabil=a.id_angajat
+GROUP BY a.id_angajat, a.nume_angajat, a.poziție
+HAVING COUNT(exp.id_angajat_responsabil) + COUNT(ev.id_angajat_responsabil) + COUNT(s.id_angajat_responsabil)  > (
+    SELECT AVG(cnt_responsabilitati)
+    FROM (
+        SELECT id_angajat_responsabil, COUNT(*) AS cnt_responsabilitati
+        FROM (
+            SELECT id_angajat_responsabil
+            FROM expoziții
+            UNION ALL
+            SELECT id_angajat_responsabil
+            FROM evenimente
+            UNION ALL
+            SELECT id_angajat_responsabil
+            FROM secțiuni
+        )
+        GROUP BY id_angajat_responsabil
+    )
+);
+
+-- cerere cu operația division
+
+select a.nume_angajat, a.id_angajat, a.poziție
+from angajati a
+where not exists (
+   select *
+   from secțiuni s
+   where a.id_angajat=s.id_angajat_responsabil
+)
+and exists (
+   select * 
+   from (
+      select id_angajat_responsabil
+      from expoziții exp
+      where a.id_angajat=exp.id_angajat_responsabil
+      union
+      select id_angajat_responsabil
+      from evenimente ev
+      where a.id_angajat=ev.id_angajat_responsabil
+   ) 
+);
+
+
+--cerere ce implementeaza analiza top-n
+
+select e.id_expoziție, e.nume_expoziție, count(b.id_expoziție) as nr_bilete_vandute
+from expoziții e
+left join bilete b on e.id_expoziție=b.id_expoziție
+group by e.id_expoziție, e.nume_expoziție
+order by nr_bilete_vandute desc
+fetch first 3 rows only;
+
+
+
+
